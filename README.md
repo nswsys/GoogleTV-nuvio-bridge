@@ -3,6 +3,8 @@
 Independent Android TV app that opens Google TV recommendations directly in
 Nuvio. It is free and has no accounts or subscriptions.
 
+*Just for fun.*
+
 ## Download
 
 Download the latest signed APK from
