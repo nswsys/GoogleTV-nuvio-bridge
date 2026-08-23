@@ -8,6 +8,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -49,6 +50,10 @@ class RecommendationAccessibilityService : AccessibilityService() {
     private var lastMediaFocusCenterX = 0
     private var lastMediaFocusCenterY = 0
     private var lastSponsoredSkipAt = 0L
+    private var sponsoredSkipStreak = 0
+    private var lastSponsoredScanKey = ""
+    private var lastSponsoredScanWasSponsored = false
+    private var lastAdDumpKey = ""
     private var lastVerticalKeyAt = 0L
     private var lastVerticalKeyCode = KeyEvent.KEYCODE_DPAD_DOWN
     private var loggedDpadCapture = false
@@ -93,16 +98,18 @@ class RecommendationAccessibilityService : AccessibilityService() {
             TAG,
             "Bridge ${BuildConfig.VERSION_NAME} connected; " +
                 "skipSponsored=${AppSettings.skipSponsoredSections(this)}; " +
-                "keyFilter=true; watchdog=true"
+                "adLogging=${AppSettings.sponsoredDebugLogging(this)}; " +
+                "keyFilter=true; watchdog=true; " +
+                "dpadSkip=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU}"
         )
         scheduleSponsoredWatchdog(SPONSORED_WATCHDOG_INITIAL_DELAY_MS)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.packageName?.toString() != GOOGLE_TV_PACKAGE) return
-        if (AppSettings.skipSponsoredSections(this) &&
-            event.eventType in GOOGLE_TV_TREE_EVENT_TYPES
-        ) {
+        // The cached tree is the fallback root for detail scanning as well, so
+        // it must be kept up to date even when ad skipping is switched off.
+        if (event.eventType in GOOGLE_TV_TREE_EVENT_TYPES) {
             rememberGoogleTvTree(event.source)
         }
         when (event.eventType) {
@@ -118,8 +125,15 @@ class RecommendationAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Ad detection also runs with skipping switched off, so the diagnostic log
+     * can be read without the bridge moving focus at the same time.
+     */
+    private fun sponsoredMonitoringEnabled(): Boolean =
+        AppSettings.skipSponsoredSections(this) || AppSettings.sponsoredDebugLogging(this)
+
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (AppSettings.skipSponsoredSections(this) &&
+        if (sponsoredMonitoringEnabled() &&
             isGoogleTvActiveWindow() &&
             event.action == KeyEvent.ACTION_DOWN &&
             event.repeatCount == 0 &&
@@ -224,7 +238,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         lateinit var probe: Runnable
         probe = Runnable {
             if (pendingSponsoredProbe === probe) pendingSponsoredProbe = null
-            if (!AppSettings.skipSponsoredSections(this)) return@Runnable
+            if (!sponsoredMonitoringEnabled()) return@Runnable
             skipSponsoredSectionIfNeeded(null, lastVerticalKeyCode)
         }
         pendingSponsoredProbe = probe
@@ -237,7 +251,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         watchdog = Runnable {
             if (sponsoredWatchdog !== watchdog) return@Runnable
             sponsoredWatchdog = null
-            val active = AppSettings.skipSponsoredSections(this) && isGoogleTvActiveWindow()
+            val active = sponsoredMonitoringEnabled() && isGoogleTvActiveWindow()
             val skipped = active && skipSponsoredSectionIfNeeded(
                 source = null,
                 direction = null,
@@ -255,6 +269,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed(watchdog, delayMs)
     }
 
+    @Suppress("DEPRECATION")
     private fun skipSponsoredSectionIfNeeded(
         source: AccessibilityNodeInfo?,
         direction: Int? = null,
@@ -262,35 +277,118 @@ class RecommendationAccessibilityService : AccessibilityService() {
     ): Boolean {
         val sponsoredContainer = source?.let(::findSponsoredContainer)
             ?: findFocusedSponsoredContainerInVisibleRoots(allowTreeFallback)
-            ?: return false
-        val now = SystemClock.uptimeMillis()
-        val resolvedDirection = direction ?: inferSponsoredDirection(sponsoredContainer)
-
-        val target = findRecommendationOutside(sponsoredContainer, resolvedDirection)
-        sponsoredContainer.recycle()
-        if (target == null) {
-            Log.d(TAG, "Sponsored section detected, but no recommendation was exposed outside it")
+        if (sponsoredContainer == null) {
+            // Focus sits on ordinary content again, so the next ad starts with
+            // a fresh budget of skip attempts.
+            sponsoredSkipStreak = 0
+            return false
+        }
+        if (!AppSettings.skipSponsoredSections(this)) {
+            sponsoredContainer.recycle()
+            logThrottled("Sponsored section detected, but skipping is switched off")
+            return false
+        }
+        if (sponsoredSkipStreak >= MAX_CONSECUTIVE_SPONSORED_SKIPS) {
+            sponsoredContainer.recycle()
+            logThrottled("Sponsored skip paused after $sponsoredSkipStreak attempts in a row")
             return true
         }
+        val resolvedDirection = direction ?: inferSponsoredDirection(sponsoredContainer)
+        val moved = movePastSponsored(sponsoredContainer, resolvedDirection)
+        sponsoredContainer.recycle()
+        if (moved) {
+            sponsoredSkipStreak++
+            lastSponsoredSkipAt = SystemClock.uptimeMillis()
+        }
+        return true
+    }
 
+    @Suppress("DEPRECATION")
+    private fun movePastSponsored(container: AccessibilityNodeInfo, direction: Int): Boolean {
+        // Emulating the remote is far more reliable than ACTION_FOCUS. Google
+        // TV renders its rows with Compose and routinely refuses a direct focus
+        // request, which is exactly what the "rejected the focus move" logs
+        // reported. A synthetic D-pad press goes through the launcher's own
+        // focus engine instead, so it lands wherever the remote would.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val globalAction = if (direction == KeyEvent.KEYCODE_DPAD_UP) {
+                GLOBAL_ACTION_DPAD_UP
+            } else {
+                GLOBAL_ACTION_DPAD_DOWN
+            }
+            if (runCatching { performGlobalAction(globalAction) }.getOrDefault(false)) {
+                Log.d(TAG, "Sponsored section skipped with a synthetic D-pad press")
+                return true
+            }
+        }
+
+        val target = findRecommendationOutside(container, direction)
+        if (target == null) {
+            Log.d(TAG, "Sponsored section detected, but no recommendation was exposed outside it")
+            return false
+        }
         val moved = runCatching {
             target.node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) ||
                 target.node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
         }.getOrDefault(false)
-        if (moved) {
-            lastSponsoredSkipAt = now
-            Log.d(TAG, "Sponsored section skipped -> ${target.label}")
-        } else {
-            Log.d(TAG, "Sponsored section detected, but Google TV rejected the focus move")
-        }
+        Log.d(
+            TAG,
+            if (moved) {
+                "Sponsored section skipped -> ${target.label}"
+            } else {
+                "Sponsored section detected, but Google TV rejected the focus move"
+            }
+        )
         target.node.recycle()
-        return true
+        return moved
     }
 
     @Suppress("DEPRECATION")
     private fun findFocusedSponsoredContainerInVisibleRoots(
         allowTreeFallback: Boolean
     ): AccessibilityNodeInfo? {
+        val roots = googleTvRoots()
+        var container: AccessibilityNodeInfo? = null
+        var focusFound = false
+        for (root in roots) {
+            if (container == null && !focusFound) {
+                val focused = runCatching {
+                    root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                        ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                }.getOrNull() ?: if (allowTreeFallback) {
+                    findInputFocusedNode(root, 0, intArrayOf(MAX_SPONSORED_ROOT_NODES))
+                } else {
+                    null
+                }
+                if (focused != null) {
+                    focusFound = true
+                    logSponsoredDiagnostics(focused)
+                    val key = focusKey(focused)
+                    // Re-walking the same unchanged card three times a second
+                    // is pure overhead, so only rescan when focus moved or the
+                    // previous scan did find an ad.
+                    container = if (key == lastSponsoredScanKey && !lastSponsoredScanWasSponsored) {
+                        null
+                    } else {
+                        findSponsoredContainer(focused)
+                    }
+                    lastSponsoredScanKey = key
+                    lastSponsoredScanWasSponsored = container != null
+                    focused.recycle()
+                }
+            }
+            root.recycle()
+        }
+        if (!focusFound) {
+            lastSponsoredScanKey = ""
+            lastSponsoredScanWasSponsored = false
+            logThrottled("Sponsored watchdog scan: roots=${roots.size}, no focused node")
+        }
+        return container
+    }
+
+    @Suppress("DEPRECATION")
+    private fun googleTvRoots(): List<AccessibilityNodeInfo> {
         val roots = ArrayList<AccessibilityNodeInfo>()
         rootInActiveWindow?.let { root ->
             if (root.packageName?.toString() == GOOGLE_TV_PACKAGE) {
@@ -314,51 +412,57 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 refreshedRoot.recycle()
             }
         }
+        return roots
+    }
 
-        var focusedSummary: String? = null
-        roots.forEachIndexed { index, root ->
-            val focused = runCatching {
-                root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                    ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-            }.getOrNull() ?: if (allowTreeFallback) {
-                findInputFocusedNode(root, 0, intArrayOf(MAX_SPONSORED_ROOT_NODES))
-            } else {
-                null
-            }
-            if (focused != null && focusedSummary == null) {
-                focusedSummary = sponsoredFocusSummary(focused)
-            }
-            val container = focused?.let(::findSponsoredContainer)
-            focused?.recycle()
-            root.recycle()
-            if (container != null) {
-                for (remainingIndex in index + 1 until roots.size) roots[remainingIndex].recycle()
-                return container
-            }
+    private fun focusKey(node: AccessibilityNodeInfo): String {
+        val bounds = Rect().also(node::getBoundsInScreen)
+        val label = node.contentDescription ?: node.text
+        return "${node.windowId}|${bounds.flattenToString()}|${node.className}|$label"
+    }
+
+    /**
+     * Dumps the focused card and every ancestor Google TV exposes, with the
+     * detector's verdict for each level.
+     *
+     * Ad markup differs across Google TV builds, locales and A/B buckets, so
+     * this is the only practical way to see why a specific device does or does
+     * not classify a row as an ad. Read it with:
+     * `adb logcat -s NuvioBridgeAds:D`.
+     */
+    @Suppress("DEPRECATION")
+    private fun logSponsoredDiagnostics(focused: AccessibilityNodeInfo) {
+        if (!AppSettings.sponsoredDebugLogging(this)) return
+        val chain = ancestorChain(focused)
+        if (chain.isEmpty()) return
+        val key = chain.joinToString("|", transform = ::focusKey)
+        if (key == lastAdDumpKey) {
+            chain.forEach(AccessibilityNodeInfo::recycle)
+            return
         }
-        logSponsoredWatchdogDiagnostic(roots.size, focusedSummary)
-        return null
+        lastAdDumpKey = key
+        Log.d(ADS_TAG, "--- focus chain, ${chain.size} level(s) ---")
+        chain.forEachIndexed { index, node ->
+            val signals = collectSignals(node, DEEP_SIGNAL_DEPTH, DEEP_SIGNAL_NODES)
+            val verdict = SponsoredSectionDetector.evaluate(signals.labels, signals.resourceIds)
+            Log.d(
+                ADS_TAG,
+                "[$index] ${node.className} id=${shortId(node.viewIdResourceName)} " +
+                    "$verdict labels=${signals.labels.take(8)} " +
+                    "ids=${signals.resourceIds.map(::shortId).distinct().take(8)}"
+            )
+        }
+        chain.forEach(AccessibilityNodeInfo::recycle)
     }
 
-    private fun sponsoredFocusSummary(focused: AccessibilityNodeInfo): String {
-        val focusedLabels = directLabels(focused).filter(String::isNotBlank).take(4)
-        val parent = runCatching { focused.parent }.getOrNull()
-        val parentLabels = parent?.let(::directLabels)
-            ?.filter(String::isNotBlank)
-            ?.take(6)
-            .orEmpty()
-        parent?.recycle()
-        return "node=${focused.className}, labels=$focusedLabels, parent=$parentLabels"
-    }
+    private fun shortId(resourceId: String?): String =
+        resourceId?.substringAfterLast('/').orEmpty()
 
-    private fun logSponsoredWatchdogDiagnostic(rootCount: Int, focusedSummary: String?) {
+    private fun logThrottled(message: String) {
         val now = SystemClock.uptimeMillis()
         if (now - lastSponsoredWatchdogDiagnosticAt < SPONSORED_DIAGNOSTIC_INTERVAL_MS) return
         lastSponsoredWatchdogDiagnosticAt = now
-        Log.d(
-            TAG,
-            "Sponsored watchdog scan: roots=$rootCount, focused=${focusedSummary ?: "none"}"
-        )
+        Log.d(TAG, message)
     }
 
     private fun inferSponsoredDirection(sponsoredContainer: AccessibilityNodeInfo): Int {
@@ -423,20 +527,143 @@ class RecommendationAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /**
+     * Walks up from the focused card looking for the row that carries the ad
+     * badge.
+     *
+     * Only row-sized ancestors are considered: once a candidate is taller than
+     * [MAX_SPONSORED_CONTAINER_HEIGHT_RATIO] of the screen it is the launcher's
+     * vertical list, and a badge found there would belong to some other row,
+     * not to the focused card.
+     */
     @Suppress("DEPRECATION")
     private fun findSponsoredContainer(source: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var current: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(source)
-        repeat(MAX_SPONSORED_ANCESTOR_LEVELS) {
-            val node = current ?: return null
-            if (SponsoredSectionDetector.isSponsoredContainer(directLabels(node))) return node
-            val parent = runCatching { node.parent }.getOrNull()
-            node.recycle()
-            current = parent
+        val chain = ancestorChain(source)
+        if (chain.isEmpty()) return null
+        var match: AccessibilityNodeInfo? = null
+
+        // Cheap pass: most builds put the badge on the node itself or on one
+        // of its immediate children.
+        for (node in chain) {
+            val signals = collectSignals(node, SHALLOW_SIGNAL_DEPTH, SHALLOW_SIGNAL_NODES)
+            if (SponsoredSectionDetector.isSponsoredContainer(signals.labels, signals.resourceIds)) {
+                match = node
+                break
+            }
         }
-        current?.recycle()
-        return null
+
+        // Thorough pass: Compose rows bury the badge several levels below the
+        // row container, and leanback rows keep it in the header above the row.
+        if (match == null) {
+            val row = chain.last()
+            val rowSignals = collectSignals(row, DEEP_SIGNAL_DEPTH, DEEP_SIGNAL_NODES)
+            val headerSignals = precedingSiblingSignals(row)
+            if (SponsoredSectionDetector.isSponsoredContainer(
+                    rowSignals.labels + headerSignals.labels,
+                    rowSignals.resourceIds + headerSignals.resourceIds
+                )
+            ) {
+                match = row
+            }
+        }
+
+        val result = match?.let(AccessibilityNodeInfo::obtain)
+        chain.forEach(AccessibilityNodeInfo::recycle)
+        return result
     }
 
+    @Suppress("DEPRECATION")
+    private fun ancestorChain(source: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val maxHeight = resources.displayMetrics.heightPixels *
+            MAX_SPONSORED_CONTAINER_HEIGHT_RATIO
+        val chain = ArrayList<AccessibilityNodeInfo>(MAX_SPONSORED_ANCESTOR_LEVELS)
+        val bounds = Rect()
+        var current: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(source)
+        while (chain.size < MAX_SPONSORED_ANCESTOR_LEVELS) {
+            val node = current ?: break
+            node.getBoundsInScreen(bounds)
+            if (chain.isNotEmpty() && bounds.height() > maxHeight) {
+                node.recycle()
+                current = null
+                break
+            }
+            chain += node
+            current = runCatching { node.parent }.getOrNull()
+        }
+        current?.recycle()
+        return chain
+    }
+
+    @Suppress("DEPRECATION")
+    private fun collectSignals(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        maxNodes: Int
+    ): NodeSignals {
+        val labels = ArrayList<String>()
+        val resourceIds = ArrayList<String>()
+        collectSignals(node, labels, resourceIds, depth, intArrayOf(maxNodes))
+        return NodeSignals(labels, resourceIds)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun collectSignals(
+        node: AccessibilityNodeInfo,
+        labels: MutableList<String>,
+        resourceIds: MutableList<String>,
+        remainingDepth: Int,
+        budget: IntArray
+    ) {
+        if (budget[0] <= 0) return
+        budget[0]--
+        node.text?.toString()?.takeIf(String::isNotBlank)?.let(labels::add)
+        node.contentDescription?.toString()?.takeIf(String::isNotBlank)?.let(labels::add)
+        node.viewIdResourceName?.takeIf(String::isNotBlank)?.let(resourceIds::add)
+        if (remainingDepth <= 0) return
+        for (index in 0 until node.childCount) {
+            if (budget[0] <= 0) break
+            val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
+            collectSignals(child, labels, resourceIds, remainingDepth - 1, budget)
+            child.recycle()
+        }
+    }
+
+    /**
+     * Signals of the sibling immediately above [node].
+     *
+     * Leanback-style rows expose their "Sponsored" header as a separate sibling
+     * instead of nesting it inside the row, so the row subtree alone never sees
+     * the badge. Only short siblings are read, otherwise a neighbouring content
+     * row would leak its labels into the verdict.
+     */
+    @Suppress("DEPRECATION")
+    private fun precedingSiblingSignals(node: AccessibilityNodeInfo): NodeSignals {
+        val parent = runCatching { node.parent }.getOrNull() ?: return NodeSignals.EMPTY
+        var previous: AccessibilityNodeInfo? = null
+        for (index in 0 until parent.childCount) {
+            val child = runCatching { parent.getChild(index) }.getOrNull() ?: continue
+            if (sameNode(child, node)) {
+                child.recycle()
+                break
+            }
+            previous?.recycle()
+            previous = child
+        }
+        parent.recycle()
+        val sibling = previous ?: return NodeSignals.EMPTY
+        val bounds = Rect().also(sibling::getBoundsInScreen)
+        val maxHeaderHeight = resources.displayMetrics.heightPixels *
+            MAX_SPONSORED_HEADER_HEIGHT_RATIO
+        val signals = if (bounds.height() <= maxHeaderHeight) {
+            collectSignals(sibling, HEADER_SIGNAL_DEPTH, HEADER_SIGNAL_NODES)
+        } else {
+            NodeSignals.EMPTY
+        }
+        sibling.recycle()
+        return signals
+    }
+
+    @Suppress("DEPRECATION")
     private fun directLabels(node: AccessibilityNodeInfo): List<String> = buildList {
         node.text?.toString()?.let(::add)
         node.contentDescription?.toString()?.let(::add)
@@ -797,6 +1024,12 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 .onFailure { Log.d(TAG, "Unable to inspect detail root: ${it.message}") }
                 .getOrNull()
         }
+        // Every window root obtained here is a fresh node. Detail scanning runs
+        // on a retry loop, so leaving them behind leaks a node per attempt. The
+        // cached tree is owned by rememberGoogleTvTree and must survive.
+        roots.forEach { root ->
+            if (root !== latestGoogleTvRoot) runCatching { @Suppress("DEPRECATION") root.recycle() }
+        }
         if (detail == null) {
             val maxRetries = if (pendingAmbiguousResolution != null) {
                 MAX_AMBIGUITY_RETRIES
@@ -1120,7 +1353,17 @@ class RecommendationAccessibilityService : AccessibilityService() {
             val label: String
         )
 
+        private data class NodeSignals(
+            val labels: List<String>,
+            val resourceIds: List<String>
+        ) {
+            companion object {
+                val EMPTY = NodeSignals(emptyList(), emptyList())
+            }
+        }
+
         private const val TAG = "NuvioBridgeService"
+        private const val ADS_TAG = "NuvioBridgeAds"
         private const val GOOGLE_TV_PACKAGE = "com.google.android.apps.tv.launcherx"
         private const val ENTITY_ACTIVITY = ".entity.EntityActivity"
         private const val CLICK_DEBOUNCE_MS = 60L
@@ -1137,7 +1380,21 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val ENTITY_DUPLICATE_WINDOW_MS = 1_200L
         private const val DIRECT_CLICK_OWNS_WINDOW_MS = 1_500L
         private const val FOCUSED_ENTITY_WINDOW_MS = 2_500L
-        private const val MAX_SPONSORED_ANCESTOR_LEVELS = 6
+        private const val MAX_SPONSORED_ANCESTOR_LEVELS = 8
+        // A Google TV content row occupies well under half the screen. Anything
+        // taller is the launcher's vertical list, whose badges belong to other
+        // rows, so it must never classify the focused card.
+        private const val MAX_SPONSORED_CONTAINER_HEIGHT_RATIO = 0.7f
+        private const val MAX_SPONSORED_HEADER_HEIGHT_RATIO = 0.18f
+        private const val SHALLOW_SIGNAL_DEPTH = 1
+        private const val SHALLOW_SIGNAL_NODES = 12
+        private const val DEEP_SIGNAL_DEPTH = 3
+        private const val DEEP_SIGNAL_NODES = 64
+        private const val HEADER_SIGNAL_DEPTH = 2
+        private const val HEADER_SIGNAL_NODES = 16
+        // Stops a misfiring detector from walking focus down the whole home
+        // screen; the streak resets as soon as focus lands outside an ad.
+        private const val MAX_CONSECUTIVE_SPONSORED_SKIPS = 4
         private const val MAX_SPONSORED_TARGET_DEPTH = 5
         private const val MAX_SPONSORED_TARGET_NODES = 48
         private const val MAX_SPONSORED_ROOT_DEPTH = 10

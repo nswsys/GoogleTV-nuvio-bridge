@@ -61,8 +61,22 @@ The selected title opens directly in Nuvio:
 - Uses a rounded, focus-aware TV chooser styled to match Google TV more closely.
 - Caches matches for 14 days.
 - Debounces repeated clicks and discards stale network results.
-- Optionally skips Google TV sponsored rows by moving focus to the next
-  recommendation while preserving the current horizontal column.
+- Optionally skips Google TV sponsored rows. An ad row is recognised by its
+  badge, its call to action or its view id anywhere in the row — including the
+  header above it — instead of requiring one exact `Sponsored` label next to one
+  exact `Learn more` label, which almost never matched a real row.
+- Only row-sized containers are inspected for that badge, so a sponsored row
+  never makes the launcher skip the ordinary rows around it, and no more than
+  four consecutive skips run before the bridge backs off.
+- Leaves the row with a synthetic D-pad press on Android 13 and newer, which
+  Google TV's Compose rows accept even when they reject a direct focus request;
+  older releases keep the previous focus-target fallback.
+- Includes a **Log ad detection** switch that writes the focused row, its view
+  ids and the detector's verdict to logcat (`adb logcat -s NuvioBridgeAds:D`),
+  so a device that still shows ads can be diagnosed.
+- Accepts titles that collide with a genre or a provider name, such as *Max*,
+  *Drama* or *Family*, when the card also exposes a year, a rating or a
+  provider. Bare genre and app tiles stay excluded.
 - Restricts the accessibility service to the Google TV launcher package.
 - Sends no account, payment, subscription, viewing-history or device data to a
   custom backend.

@@ -64,11 +64,18 @@ object GoogleTvDetailDetector {
             else -> null
         }
 
+        // The metadata block sits in the upper part of the detail page. The old
+        // fixed 760px cut-off was tuned on a 1080p panel and discarded the whole
+        // block on 1440p/2160p launcher surfaces, so measure against the window.
+        val windowHeight = Rect().also(root::getBoundsInScreen).height()
+            .takeIf { it > 0 } ?: DEFAULT_WINDOW_HEIGHT_PX
+        val metadataCutoff = windowHeight * METADATA_CUTOFF_RATIO
+
         val titles = LinkedHashSet<String>()
         titleRow.value.takeIf(::looksLikeTitle)?.let(titles::add)
         nodes.asSequence()
             .filter { it.className.endsWith("TextView") || it.className == "android.view.View" }
-            .filter { it.bounds.top < 760 }
+            .filter { it.bounds.top < metadataCutoff }
             .map(NodeText::value)
             .filter(::looksLikeTitle)
             .forEach { value -> TitleNormalizer.candidates(listOf(value)).forEach(titles::add) }
@@ -128,6 +135,9 @@ object GoogleTvDetailDetector {
         if (!clean.any(Char::isLetter)) return false
         return TitleNormalizer.candidates(listOf(clean)).isNotEmpty()
     }
+
+    private const val DEFAULT_WINDOW_HEIGHT_PX = 1080
+    private const val METADATA_CUTOFF_RATIO = 0.7f
 
     private data class NodeText(
         val value: String,

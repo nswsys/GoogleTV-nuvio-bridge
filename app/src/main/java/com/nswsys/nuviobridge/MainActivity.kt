@@ -15,6 +15,7 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var apiKeyInput: EditText
     private lateinit var skipSponsoredSwitch: Switch
+    private lateinit var sponsoredDebugSwitch: Switch
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,6 +28,11 @@ class MainActivity : Activity() {
         skipSponsoredSwitch.isChecked = AppSettings.skipSponsoredSections(this)
         skipSponsoredSwitch.setOnCheckedChangeListener { _, enabled ->
             AppSettings.setSkipSponsoredSections(this, enabled)
+        }
+        sponsoredDebugSwitch = findViewById(R.id.sponsored_debug_logging)
+        sponsoredDebugSwitch.isChecked = AppSettings.sponsoredDebugLogging(this)
+        sponsoredDebugSwitch.setOnCheckedChangeListener { _, enabled ->
+            AppSettings.setSponsoredDebugLogging(this, enabled)
         }
         findViewById<Button>(R.id.save_tmdb_key).setOnClickListener {
             AppSettings.setTmdbApiKey(this, apiKeyInput.text.toString())

@@ -78,6 +78,26 @@
             android:textColor="@color/text_secondary"
             android:textSize="14sp" />
 
+        <Switch
+            android:id="@+id/sponsored_debug_logging"
+            android:layout_width="560dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:minHeight="64dp"
+            android:paddingHorizontal="20dp"
+            android:text="@string/sponsored_debug_logging"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp" />
+
+        <TextView
+            android:layout_width="560dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:paddingHorizontal="20dp"
+            android:text="@string/sponsored_debug_logging_summary"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
         <Button
             android:id="@+id/open_accessibility"
             android:layout_width="360dp"

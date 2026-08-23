@@ -340,11 +340,56 @@ class TitleNormalizerTest {
     }
 
     @Test
-    fun doesNotTreatAStandaloneSponsoredTitleAsAnAdContainer() {
+    fun treatsAStandaloneSponsoredBadgeAsAnAdContainer() {
+        // Demanding a badge *and* a call to action matched almost no real ad
+        // row, so a bare badge is now enough. Nothing Google TV recommends is
+        // actually named "Sponsored".
         assertTrue(
-            !SponsoredSectionDetector.isSponsoredContainer(
+            SponsoredSectionDetector.isSponsoredContainer(
                 listOf("Sponsored", "2025", "Watch now")
             )
         )
+    }
+
+    @Test
+    fun keepsGenreAndProviderWordsThatAreAlsoRealTitles() {
+        // "Max" (2015), "Drama" and "Family" are genuine titles. They used to be
+        // discarded as genre or provider tiles, so those cards never opened.
+        assertTrue(
+            TitleNormalizer.candidates(listOf("Max, 2015")).contains("Max")
+        )
+        assertTrue(
+            TitleNormalizer.candidates(listOf("Max, requires a subscription to Netflix"))
+                .contains("Max")
+        )
+        assertTrue(
+            TitleNormalizer.candidates(listOf("Drama, 2019")).contains("Drama")
+        )
+    }
+
+    @Test
+    fun stillRejectsBareGenreAndProviderTiles() {
+        listOf("Max", "Drama", "Family", "Reality TV", "Netflix", "Prime Video")
+            .forEach { value ->
+                assertTrue(
+                    "Expected to reject: $value",
+                    TitleNormalizer.candidates(listOf(value)).isEmpty()
+                )
+            }
+    }
+
+    @Test
+    fun launcherChromeStaysRejectedEvenWithCardMetadata() {
+        listOf("Watchlist, 2024", "Cast & crew, 2024", "Ways to watch, 2024")
+            .forEach { value ->
+                assertTrue(
+                    "Expected to reject: $value",
+                    TitleNormalizer.candidates(listOf(value)).none {
+                        TitleNormalizer.normalized(it) in setOf(
+                            "watchlist", "cast crew", "ways to watch"
+                        )
+                    }
+                )
+            }
     }
 }

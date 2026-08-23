@@ -38,25 +38,38 @@ object TitleNormalizer {
         "android.widget.FrameLayout",
         "android.widget.ImageView"
     )
-    private val nonMediaLabels = setOf(
-        "action", "accion", "adventure", "aventura", "animation", "animacion",
+    // Launcher chrome and detail-page section headings. None of these is ever
+    // the name of a movie or a series, so they are rejected unconditionally.
+    private val chromeLabels = setOf(
         "apps", "your apps", "mis aplicaciones", "browse by genre", "buscar por genero",
-        "children", "kids", "comedy", "comedia", "crime", "crimen", "documentary", "documental",
-        "drama", "family", "familia", "fantasy", "fantasia", "home", "inicio",
-        "horror", "terror", "live", "en vivo", "movies", "peliculas", "music", "musica",
-        "musicals", "musicales", "mystery", "misterio", "news", "noticias", "profile", "perfil", "profiles", "perfiles",
-        "reality tv", "recommendations", "recomendaciones", "romance", "science fiction", "ciencia ficcion",
-        "search", "buscar", "settings", "configuracion", "shows", "series", "sports", "deportes",
-        "thriller", "western", "watchlist", "lista de seguimiento", "see all", "ver todo",
-        "netflix", "youtube", "prime video", "amazon prime video", "disney plus", "hulu",
-        "max", "apple tv", "nuvio", "what it s about", "what people are saying",
-        "de que se trata", "que dice la gente", "cast crew", "cast and crew", "reparto",
-        "seasons", "temporadas", "ways to watch", "formas de ver", "watched it",
-        "ya la viste", "subscribe", "suscribirse", "prime video subscribe", "screensaver",
-        "protector de pantalla", "new season new looks", "new season",
+        "home", "inicio", "search", "buscar", "settings", "configuracion",
+        "profile", "perfil", "profiles", "perfiles", "recommendations", "recomendaciones",
+        "watchlist", "lista de seguimiento", "see all", "ver todo", "nuvio",
+        "what it s about", "what people are saying", "de que se trata", "que dice la gente",
+        "cast crew", "cast and crew", "reparto", "seasons", "temporadas",
+        "ways to watch", "formas de ver", "watched it", "ya la viste",
+        "subscribe", "suscribirse", "prime video subscribe",
+        "screensaver", "protector de pantalla", "new season new looks",
         "movies and shows across services", "peliculas y series de todos tus servicios",
-        "top match animated", "top match"
+        "top match animated", "top match", "live", "en vivo"
     )
+
+    // Genre tiles, provider tiles and content-type words. Every one of these is
+    // also a real title — "Max" (2015), "Drama", "Family", "Western" — so they
+    // are only rejected when the card exposes nothing but the bare word. A card
+    // that also carries a year, a provider or a rating is treated as media.
+    private val ambiguousLabels = setOf(
+        "action", "accion", "adventure", "aventura", "animation", "animacion",
+        "children", "kids", "comedy", "comedia", "crime", "crimen",
+        "documentary", "documental", "drama", "family", "familia", "fantasy", "fantasia",
+        "horror", "terror", "movies", "peliculas", "music", "musica",
+        "musicals", "musicales", "mystery", "misterio", "news", "noticias",
+        "reality tv", "romance", "science fiction", "ciencia ficcion",
+        "shows", "series", "sports", "deportes", "thriller", "western", "new season",
+        "netflix", "youtube", "prime video", "amazon prime video", "disney plus",
+        "hulu", "max", "apple tv"
+    )
+
     private val providerLabels = setOf(
         "amazon prime video", "apple tv", "apple tv+", "crackle", "disney+", "disney plus", "freevee",
         "google tv freeplay", "hbo max", "hulu", "max", "netflix", "paramount+", "paramount plus",
@@ -125,9 +138,13 @@ object TitleNormalizer {
                 addAll(nearbyText)
             }
         )
+        val cardContext = buildList {
+            directDescription?.let(::add)
+            addAll(directText)
+        }.any(::hasCardContext)
         return possibleTitles.any { title ->
             val value = normalized(title)
-            value !in nonMediaLabels &&
+            !isRejectedLabel(value, cardContext) &&
                 value !in excludedLabels &&
                 value.any(Char::isLetter) &&
                 value.length >= 2
@@ -140,16 +157,25 @@ object TitleNormalizer {
         rawValues.forEach { raw ->
             val clean = invisibleFormatting.replace(raw, "")
                 .replace(spaces, " ").trim().trim('|', '•')
-            if (!isUseful(clean)) return@forEach
+            // "Netflix, Watch now" is a provider button, not a card: dropping
+            // the whole value also drops the "Netflix" comma prefix that the
+            // fallbacks below would otherwise produce.
+            if (isProviderPlaybackAction(clean)) return@forEach
+            val cardContext = hasCardContext(clean)
+            if (!isUseful(clean, cardContext)) return@forEach
 
             val markerMatch = metadataMarker.find(clean)
             if (markerMatch != null) {
-                addCandidate(output, removeTrailingProvider(clean.substring(0, markerMatch.range.first)))
+                addCandidate(
+                    output,
+                    removeTrailingProvider(clean.substring(0, markerMatch.range.first)),
+                    cardContext
+                )
             } else {
                 val withoutRole = trailingRole.replace(clean, "")
                 val withoutProvider = removeTrailingProvider(withoutRole)
-                addCandidate(output, withoutProvider)
-                if (withoutProvider == withoutRole) addCandidate(output, withoutRole)
+                addCandidate(output, withoutProvider, cardContext)
+                if (withoutProvider == withoutRole) addCandidate(output, withoutRole, cardContext)
 
                 // A card may be "Title, provider/synopsis". Walk commas from
                 // right to left so titles containing commas remain intact.
@@ -157,7 +183,9 @@ object TitleNormalizer {
                     .filter { clean[it] == ',' }
                     .asReversed()
                     .take(3)
-                    .forEach { comma -> addCandidate(output, clean.substring(0, comma)) }
+                    .forEach { comma ->
+                        addCandidate(output, clean.substring(0, comma), cardContext)
+                    }
             }
         }
 
@@ -212,11 +240,15 @@ object TitleNormalizer {
         return (overlap * 70.0 + prefixBonus + containmentBonus).coerceAtMost(99.0)
     }
 
-    private fun addCandidate(output: MutableSet<String>, value: String) {
+    private fun addCandidate(
+        output: MutableSet<String>,
+        value: String,
+        cardContext: Boolean = false
+    ) {
         val candidate = value.trim().trim(',', '-', ':', ';').trim()
         if (isProviderPlaybackAction(candidate)) return
-        if (normalized(candidate) in providerLabels) return
-        if (isUseful(candidate)) output += candidate
+        if (!cardContext && normalized(candidate) in providerLabels) return
+        if (isUseful(candidate, cardContext)) output += candidate
     }
 
     fun isProviderPlaybackAction(value: String): Boolean {
@@ -226,16 +258,34 @@ object TitleNormalizer {
             playbackActionPattern.matches(parts.last())
     }
 
-    private fun isUseful(value: String): Boolean {
+    private fun isUseful(value: String, cardContext: Boolean = false): Boolean {
         if (value.length !in 2..180) return false
         if (nonTitleContentPattern.containsMatchIn(value)) return false
         val normalized = normalized(value)
         if (normalized.length < 2) return false
         if (placeholderPattern.matches(value.trim())) return false
-        if (normalized in nonMediaLabels) return false
+        if (isRejectedLabel(normalized, cardContext)) return false
         return normalized !in setOf(
             "ver ahora", "watch now", "reproducir", "play", "inicio", "home",
             "patrocinado", "sponsored", "mis aplicaciones", "your apps"
         )
+    }
+
+    private fun isRejectedLabel(normalizedValue: String, cardContext: Boolean): Boolean =
+        normalizedValue in chromeLabels || (!cardContext && normalizedValue in ambiguousLabels)
+
+    /**
+     * Whether a raw card label carries metadata beyond the bare title.
+     *
+     * Genre tiles and app tiles expose a single word ("Drama", "Max"), while a
+     * real recommendation adds a year, a provider, a rating or a synopsis after
+     * a comma. That difference is what lets a movie actually named "Max" reach
+     * TMDB without the "Browse by genre" row hijacking ordinary clicks.
+     */
+    private fun hasCardContext(rawValue: String): Boolean {
+        val value = trailingRole.replace(rawValue, "").trim()
+        return metadataMarker.containsMatchIn(value) ||
+            value.contains(',') ||
+            yearPattern.containsMatchIn(value)
     }
 }

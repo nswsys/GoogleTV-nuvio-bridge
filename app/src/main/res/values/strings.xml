@@ -11,6 +11,8 @@
     <string name="tmdb_key_saved">TMDB key saved locally</string>
     <string name="skip_sponsored_sections">Skip sponsored sections</string>
     <string name="skip_sponsored_sections_summary">Automatically moves focus to the next Google TV row when a sponsored card is selected.</string>
+    <string name="sponsored_debug_logging">Log ad detection</string>
+    <string name="sponsored_debug_logging_summary">Writes the focused Google TV row and the ad verdict to logcat. Read it with: adb logcat -s NuvioBridgeAds:D</string>
     <string name="status_ready">Ready. TMDB is configured and Nuvio was detected.</string>
     <string name="status_missing_tmdb">A TMDB API v3 key is required. Enter it below and save it.</string>
     <string name="status_missing_nuvio">Nuvio was not detected. Install the current Nuvio TV build first.</string>
