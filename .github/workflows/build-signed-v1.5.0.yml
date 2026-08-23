@@ -31,33 +31,33 @@ jobs:
       - name: Encrypt signing key
         run: |
           cat > /tmp/wrap-cert.pem <<'CERT'
------BEGIN CERTIFICATE-----
-MIIENTCCAp2gAwIBAgIUYxYAR8E6ZvdBuLJYL8EGEQafYRUwDQYJKoZIhvcNAQEL
-BQAwKjEoMCYGA1UEAwwfTnV2aW8gQnVpbGQgQXJ0aWZhY3QgRW5jcnlwdGlvbjAe
-Fw0yNjA4MjMyMTU4MTJaFw0yNjA4MjUyMTU4MTJaMCoxKDAmBgNVBAMMH051dmlv
-IEJ1aWxkIEFydGlmYWN0IEVuY3J5cHRpb24wggGiMA0GCSqGSIb3DQEBAQUAA4IB
-jwAwggGKAoIBgQCLc0h2rNjmxwGSW9YBjCV2yGGRcTOKr2PojUL7AgL2JCeTYwTN
-UKOE8h1nMc+fBRF8XwfTjM6O++UEuWOqVHBwae3AP3mvHhu/UXYSPoEsrgOIdFT3
-ihD/2Nu9FaaBHQh9jr4hpCjggcHcvl+aVkWlg37uYfmF1UDuWHcVDDzTYJ9TYy8e
-SL54XE4KTjXqgxvtCeU88lNBK1DGG8dobMIwMKnh6fwq0zaKvCkmUt43Nn91Iot2
-H6fbZOycCK1oMufjol8H/NafMIB2TsJdieejog+x6wqSv98xRdeXtz6qkOLoOeEN
-l2oxLpQY1tKTZfEuhfsXgt5f9a6kEXl5PKwOeJODXwcYpwxQFeMuS+IWuW8XcZPC
-/ry4RnWsijn75OIcGwlU/0sixgpnleinFGfsQSywWabU86ckg0vDfY/VAbCcGhTo
-vmo+5mcfItHFC31ytXKNmLZTBnPT+jZW38FzlIAngF+/Yt+jqiuWEJjFUIRvu0Vc
-5s9CTqU+jjqqI/UCAwEAAaNTMFEwHQYDVR0OBBYEFFGBpsqyJZD9gHJULK4JPSTP
-WdMIMB8GA1UdIwQYMBaAFFGBpsqyJZD9gHJULK4JPSTPWdMIMA8GA1UdEwEB/wQF
-MAMBAf8wDQYJKoZIhvcNAQELBQADggGBAGeGy86TuXlIkxNISKQrcnJGdJaSavyW
-MYXg95CsBNN4iAAhdo9I08bh81Xffck8atXGpZhJEHqSnPQbDyltX3ZMEbpZqgnw
-ZXFLgAYY09YMbkLiEIIyl8I55YrrKaF6XksIJifOyMrWPFrmOL7d88HadY25tE0s
-Vgu8QNwYA/yGroUz4IZROnVN4+zOeSCXVuvH3wToo1kkTzSvD8b/Z64A0XOCvW0A
-XCrWoRd+kuVXrVPJ4GIm1VB8/N180QLBYSaH/cEws+hZ18pbhttmYSIV3eFfAu5n
-MuLV7q0P/1J8jt/o8xjAN1tmrCvZ8xdQv24wNv3mpR8snkwnYMzkJrOZH82JDCjS
-ZD0MGxnaN0fWLkDoJAN68mysESiBf5NAvbeTRIK+GhYKg2CrGrDWTsZN2P4l1fdA
-ahlN6+hUsyXaR4GJxt7Oa6jn87OTgKx2WI3X0iSpEUm05njdqoAfqTgB0QhkeJwo
-iCGczVwITI/IhqPOYARCaZgj4tC2Lz4tLQ==
------END CERTIFICATE-----
-CERT
-          openssl cms -encrypt -binary -aes-256-cbc -in .signing/nuviobridge-release.jks -outform DER -out nuviobridge-release.jks.p7m /tmp/wrap-cert.pem
+          -----BEGIN CERTIFICATE-----
+          MIIENTCCAp2gAwIBAgIUYxYAR8E6ZvdBuLJYL8EGEQafYRUwDQYJKoZIhvcNAQEL
+          BQAwKjEoMCYGA1UEAwwfTnV2aW8gQnVpbGQgQXJ0aWZhY3QgRW5jcnlwdGlvbjAe
+          Fw0yNjA4MjMyMTU4MTJaFw0yNjA4MjUyMTU4MTJaMCoxKDAmBgNVBAMMH051dmlv
+          IEJ1aWxkIEFydGlmYWN0IEVuY3J5cHRpb24wggGiMA0GCSqGSIb3DQEBAQUAA4IB
+          jwAwggGKAoIBgQCLc0h2rNjmxwGSW9YBjCV2yGGRcTOKr2PojUL7AgL2JCeTYwTN
+          UKOE8h1nMc+fBRF8XwfTjM6O++UEuWOqVHBwae3AP3mvHhu/UXYSPoEsrgOIdFT3
+          ihD/2Nu9FaaBHQh9jr4hpCjggcHcvl+aVkWlg37uYfmF1UDuWHcVDDzTYJ9TYy8e
+          SL54XE4KTjXqgxvtCeU88lNBK1DGG8dobMIwMKnh6fwq0zaKvCkmUt43Nn91Iot2
+          H6fbZOycCK1oMufjol8H/NafMIB2TsJdieejog+x6wqSv98xRdeXtz6qkOLoOeEN
+          l2oxLpQY1tKTZfEuhfsXgt5f9a6kEXl5PKwOeJODXwcYpwxQFeMuS+IWuW8XcZPC
+          /ry4RnWsijn75OIcGwlU/0sixgpnleinFGfsQSywWabU86ckg0vDfY/VAbCcGhTo
+          vmo+5mcfItHFC31ytXKNmLZTBnPT+jZW38FzlIAngF+/Yt+jqiuWEJjFUIRvu0Vc
+          5s9CTqU+jjqqI/UCAwEAAaNTMFEwHQYDVR0OBBYEFFGBpsqyJZD9gHJULK4JPSTP
+          WdMIMB8GA1UdIwQYMBaAFFGBpsqyJZD9gHJULK4JPSTPWdMIMA8GA1UdEwEB/wQF
+          MAMBAf8wDQYJKoZIhvcNAQELBQADggGBAGeGy86TuXlIkxNISKQrcnJGdJaSavyW
+          MYXg95CsBNN4iAAhdo9I08bh81Xffck8atXGpZhJEHqSnPQbDyltX3ZMEbpZqgnw
+          ZXFLgAYY09YMbkLiEIIyl8I55YrrKaF6XksIJifOyMrWPFrmOL7d88HadY25tE0s
+          Vgu8QNwYA/yGroUz4IZROnVN4+zOeSCXVuvH3wToo1kkTzSvD8b/Z64A0XOCvW0A
+          XCrWoRd+kuVXrVPJ4GIm1VB8/N180QLBYSaH/cEws+hZ18pbhttmYSIV3eFfAu5n
+          MuLV7q0P/1J8jt/o8xjAN1tmrCvZ8xdQv24wNv3mpR8snkwnYMzkJrOZH82JDCjS
+          ZD0MGxnaN0fWLkDoJAN68mysESiBf5NAvbeTRIK+GhYKg2CrGrDWTsZN2P4l1fdA
+          ahlN6+hUsyXaR4GJxt7Oa6jn87OTgKx2WI3X0iSpEUm05njdqoAfqTgB0QhkeJwo
+          iCGczVwITI/IhqPOYARCaZgj4tC2Lz4tLQ==
+          -----END CERTIFICATE-----
+          CERT
+                    openssl cms -encrypt -binary -aes-256-cbc -in .signing/nuviobridge-release.jks -outform DER -out nuviobridge-release.jks.p7m /tmp/wrap-cert.pem
           rm -f .signing/nuviobridge-release.jks /tmp/wrap-cert.pem
       - uses: actions/upload-artifact@v4
         with:
