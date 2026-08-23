@@ -15,6 +15,13 @@ Current release:
 
 ## Demo
 
+![Nuvio Recommendation Opener demo](docs/nuvio-bridge-demo.gif)
+
+The demo shows a recommendation opening directly in Nuvio and an ambiguous
+title being resolved with the year-based match chooser.
+
+### Screenshots
+
 Select a movie or series from the Google TV home screen:
 
 ![Google TV recommendation selected](docs/screenshots/01-google-tv-recommendation.jpg)
