@@ -1,8 +1,7 @@
 # Nuvio Recommendation Opener
 
 Independent Android TV app that opens Google TV recommendations directly in
-Nuvio. It is free, has no accounts or subscriptions, and does not contain code
-from TvReccomendationBridge.
+Nuvio. It is free and has no accounts or subscriptions.
 
 ## Improvements
 
