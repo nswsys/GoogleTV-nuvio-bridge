@@ -13,6 +13,21 @@ Download the latest signed APK from
 Current release:
 [NuvioRecommendationOpener-v1.4.15.apk](https://github.com/nswsys/GoogleTV-nuvio-bridge/releases/download/v1.4.15/NuvioRecommendationOpener-v1.4.15.apk)
 
+## Demo
+
+Select a movie or series from the Google TV home screen:
+
+![Google TV recommendation selected](docs/screenshots/01-google-tv-recommendation.jpg)
+
+When several TMDB titles are plausible, choose the correct match with the TV
+remote:
+
+![Nuvio match chooser](docs/screenshots/02-match-chooser.jpg)
+
+The selected title opens directly in Nuvio:
+
+![Title opened in Nuvio](docs/screenshots/03-opened-in-nuvio.jpg)
+
 ## Improvements
 
 - Uses Nuvio's current TMDB deep links directly:
@@ -51,7 +66,6 @@ Current release:
 - Nuvio TV installed.
 - Android 7.0 or newer.
 - A free TMDB API v3 key.
-- Android Studio with JDK 17 and Android SDK 36.
 
 ## Configure
 
@@ -81,17 +95,65 @@ app.
 
 ## Install and enable
 
-Install the APK with Android Studio or ADB:
+### Install directly on Google TV
+
+1. Install Nuvio TV and open it at least once to finish its initial setup.
+2. Download the signed APK from the
+   [latest release](https://github.com/nswsys/GoogleTV-nuvio-bridge/releases/latest).
+3. Transfer the APK to the TV with a USB drive, **Send Files to TV**,
+   **Downloader**, or another file manager.
+4. If prompted, allow **Install unknown apps** for the app used to open the APK.
+5. Install **Nuvio Recommendation Opener**. When updating, install the new APK
+   over the existing version; do not uninstall the old version first.
+6. Open the bridge, enter a free TMDB API v3 key, and choose
+   **Save TMDB key**.
+7. Choose **Enable accessibility service**, find
+   **Nuvio Recommendation Opener**, and turn it on.
+8. If Google TV blocks the service, open the bridge's app-info screen, choose
+   **Allow restricted settings**, and then enable the accessibility service
+   again. Menu names vary by device and Android version.
+9. Return to the bridge and choose **Test Nuvio integration**. It should open
+   *The Matrix* in Nuvio.
+
+After setup, return to the Google TV home screen and select a movie or series.
+The bridge will resolve the title and open it in Nuvio. Ambiguous titles display
+a remote-friendly match chooser first.
+
+### Install with ADB
+
+Download the release APK to the current directory, connect to the TV, and run:
 
 ```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r NuvioRecommendationOpener-v1.4.15.apk
 ```
 
-Open the app and choose **Enable accessibility service**. Android 13 and newer
-may require allowing restricted settings for sideloaded apps from the app-info
-screen. The exact menu varies by Google TV manufacturer.
+If Android reports that accessibility is restricted for the sideloaded app:
 
-Use **Test Nuvio integration** to open *The Matrix* through a TMDB deep link.
+```bash
+adb shell appops set com.nswsys.nuviobridge ACCESS_RESTRICTED_SETTINGS allow
+```
+
+Enable the service from the Google TV accessibility menu. You can verify that
+it is active with:
+
+```bash
+adb shell settings get secure enabled_accessibility_services
+```
+
+The output should contain:
+
+```text
+com.nswsys.nuviobridge/com.nswsys.nuviobridge.RecommendationAccessibilityService
+```
+
+## Build from source
+
+Building the project requires Android Studio or Gradle with JDK 17 and Android
+SDK 36. Configure `local.properties` as described above, then run:
+
+```bash
+./gradlew test assembleDebug
+```
 
 ## Privacy
 
