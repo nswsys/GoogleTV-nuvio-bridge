@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nuvio Recommendation Opener</string>
+    <string name="app_summary">Open Google TV recommendations directly in Nuvio. Free, local and without an account.</string>
+    <string name="service_name">Google TV recommendation detector</string>
+    <string name="service_description">Detects clicks on Google TV recommendation cards and opens the matching title in Nuvio.</string>
+    <string name="open_accessibility">Enable accessibility service</string>
+    <string name="test_nuvio">Test Nuvio integration</string>
+    <string name="tmdb_key_hint">TMDB API v3 key</string>
+    <string name="save_tmdb_key">Save TMDB key</string>
+    <string name="tmdb_key_saved">TMDB key saved locally</string>
+    <string name="skip_sponsored_sections">Skip sponsored sections</string>
+    <string name="skip_sponsored_sections_summary">Automatically moves focus to the next Google TV row when a sponsored card is selected.</string>
+    <string name="status_ready">Ready. TMDB is configured and Nuvio was detected.</string>
+    <string name="status_missing_tmdb">A TMDB API v3 key is required. Enter it below and save it.</string>
+    <string name="status_missing_nuvio">Nuvio was not detected. Install the current Nuvio TV build first.</string>
+    <string name="status_service_enabled">Accessibility service: enabled.</string>
+    <string name="status_service_disabled">Accessibility service: disabled.</string>
+    <string name="test_failed">Nuvio could not be opened.</string>
+    <string name="privacy_note">The service listens only to clicks in the Google TV launcher. Titles are sent to TMDB for identification; no account, subscription or payment information is collected.</string>
+</resources>
