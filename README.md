@@ -3,6 +3,14 @@
 Independent Android TV app that opens Google TV recommendations directly in
 Nuvio. It is free and has no accounts or subscriptions.
 
+## Download
+
+Download the latest signed APK from
+[GitHub Releases](https://github.com/nswsys/GoogleTV-nuvio-bridge/releases/latest).
+
+Current release:
+[NuvioRecommendationOpener-v1.4.15.apk](https://github.com/nswsys/GoogleTV-nuvio-bridge/releases/download/v1.4.15/NuvioRecommendationOpener-v1.4.15.apk)
+
 ## Improvements
 
 - Uses Nuvio's current TMDB deep links directly:
