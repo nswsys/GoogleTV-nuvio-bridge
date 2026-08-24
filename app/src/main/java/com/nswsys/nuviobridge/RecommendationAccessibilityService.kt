@@ -92,7 +92,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
             packageNames = arrayOf(GOOGLE_TV_PACKAGE)
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+                AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
         }
         Log.d(
             TAG,
@@ -182,7 +183,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
     }
 
     private fun rememberFocusedRecommendation(event: AccessibilityEvent) {
-        event.source?.let { source ->
+        val focusedSource = event.source
+        focusedSource?.let { source ->
             // Google TV already gives us the newly focused node here. Inspect
             // it directly instead of depending on findFocus(), which returns
             // null on some Compose launcher surfaces (including Sabrina).
@@ -193,6 +195,13 @@ class RecommendationAccessibilityService : AccessibilityService() {
                     return
                 }
             }
+        }
+        if (focusedSource == null && AppSettings.sponsoredDebugLogging(this)) {
+            Log.d(
+                ADS_TAG,
+                "Focus event has no source: class=${event.className}, " +
+                    "text=${event.text}, description=${event.contentDescription}"
+            )
         }
         val directText = event.text.mapNotNull { it?.toString() }
         val directDescription = event.contentDescription?.toString()
