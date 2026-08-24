@@ -271,7 +271,43 @@ class RecommendationAccessibilityService : AccessibilityService() {
             now - lastSourceLessAdActionAt <= SOURCELESS_UP_INFERENCE_WINDOW_MS
         val verdict = SponsoredSectionDetector.evaluate(labels)
         if (!verdict.isSponsored) {
-            if (hasAdAction) lastSourceLessAdActionAt = now
+            if (hasAdAction) {
+                lastSourceLessAdActionAt = now
+                // Entering a Sabrina ad from below lands on its isolated CTA
+                // before the Sponsored badge. Escape immediately instead of
+                // making the user traverse every internal focus stop first.
+                if (className.endsWith("Button") &&
+                    AppSettings.skipSponsoredSections(this) &&
+                    now - lastSponsoredSkipAt >= SOURCELESS_SKIP_DEBOUNCE_MS
+                ) {
+                    val moved = runCatching {
+                        performGlobalAction(GLOBAL_ACTION_DPAD_UP)
+                    }.getOrDefault(false)
+                    Log.d(
+                        TAG,
+                        if (moved) {
+                            "Source-less sponsored CTA skipped up with a synthetic D-pad press"
+                        } else {
+                            "Source-less sponsored CTA detected, but synthetic D-pad was rejected"
+                        }
+                    )
+                    if (moved) {
+                        lastSponsoredSkipAt = now
+                        repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
+                            mainHandler.postDelayed(
+                                {
+                                    runCatching {
+                                        performGlobalAction(GLOBAL_ACTION_DPAD_UP)
+                                    }
+                                    Log.d(TAG, "Sponsored UP follow-up ${index + 1}")
+                                },
+                                SOURCELESS_BURST_INTERVAL_MS * (index + 1)
+                            )
+                        }
+                    }
+                    return true
+                }
+            }
             return false
         }
         Log.d(ADS_TAG, "Source-less sponsored focus detected: $verdict labels=$labels")
