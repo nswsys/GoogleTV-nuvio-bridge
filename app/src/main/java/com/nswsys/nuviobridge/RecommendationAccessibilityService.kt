@@ -51,6 +51,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
     private var lastMediaFocusCenterY = 0
     private var lastSponsoredSkipAt = 0L
     private var lastSourceLessAdActionAt = 0L
+    private val pendingSourceLessSponsoredFollowUps = mutableListOf<Runnable>()
     private var sponsoredSkipStreak = 0
     private var lastSponsoredScanKey = ""
     private var lastSponsoredScanWasSponsored = false
@@ -221,6 +222,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         if (directValues.any(TitleNormalizer::isProviderPlaybackAction) ||
             TitleNormalizer.isLauncherControl(directValues)
         ) {
+            cancelSourceLessSponsoredFollowUps("normal launcher content")
             clearFocusedRecommendation()
             return
         }
@@ -234,6 +236,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 emptyList(), launcherAppLabels
             )
         ) return
+        cancelSourceLessSponsoredFollowUps("media recommendation")
         val previousFingerprint = lastFocusedCandidates.firstOrNull()
             ?.let(TitleNormalizer::normalized)
         lastFocusedCandidates = candidates
@@ -293,17 +296,10 @@ class RecommendationAccessibilityService : AccessibilityService() {
                     )
                     if (moved) {
                         lastSponsoredSkipAt = now
-                        repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
-                            mainHandler.postDelayed(
-                                {
-                                    runCatching {
-                                        performGlobalAction(GLOBAL_ACTION_DPAD_UP)
-                                    }
-                                    Log.d(TAG, "Sponsored UP follow-up ${index + 1}")
-                                },
-                                SOURCELESS_BURST_INTERVAL_MS * (index + 1)
-                            )
-                        }
+                        scheduleSourceLessSponsoredFollowUps(
+                            GLOBAL_ACTION_DPAD_UP,
+                            "Sponsored UP follow-up"
+                        )
                     }
                     return true
                 }
@@ -347,18 +343,40 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 className.endsWith("TextView") &&
                 labels.size == 1
             ) {
-                repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
-                    mainHandler.postDelayed(
-                        {
-                            runCatching { performGlobalAction(globalAction) }
-                            Log.d(TAG, "Sponsored skip follow-up ${index + 1}")
-                        },
-                        SOURCELESS_BURST_INTERVAL_MS * (index + 1)
-                    )
-                }
+                scheduleSourceLessSponsoredFollowUps(
+                    globalAction,
+                    "Sponsored skip follow-up"
+                )
             }
         }
         return true
+    }
+
+    private fun scheduleSourceLessSponsoredFollowUps(
+        globalAction: Int,
+        logPrefix: String
+    ) {
+        cancelSourceLessSponsoredFollowUps()
+        repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
+            lateinit var followUp: Runnable
+            followUp = Runnable {
+                pendingSourceLessSponsoredFollowUps.remove(followUp)
+                runCatching { performGlobalAction(globalAction) }
+                Log.d(TAG, "$logPrefix ${index + 1}")
+            }
+            pendingSourceLessSponsoredFollowUps += followUp
+            mainHandler.postDelayed(
+                followUp,
+                SOURCELESS_BURST_INTERVAL_MS * (index + 1)
+            )
+        }
+    }
+
+    private fun cancelSourceLessSponsoredFollowUps(reason: String? = null) {
+        if (pendingSourceLessSponsoredFollowUps.isEmpty()) return
+        pendingSourceLessSponsoredFollowUps.forEach(mainHandler::removeCallbacks)
+        pendingSourceLessSponsoredFollowUps.clear()
+        reason?.let { Log.d(TAG, "Sponsored follow-ups cancelled: $it") }
     }
 
     private fun scheduleSponsoredRootProbe(delayMs: Long, replacePending: Boolean = false) {
