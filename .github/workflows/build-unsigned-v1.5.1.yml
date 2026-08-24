@@ -20,10 +20,13 @@ jobs:
       - name: Align unsigned APK
         run: |
           BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
-          "$BUILD_TOOLS/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk NuvioRecommendationOpener-v1.5.1-unsigned-aligned.apk\n          cp "$BUILD_TOOLS/lib/apksigner.jar" apksigner.jar
+          "$BUILD_TOOLS/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk NuvioRecommendationOpener-v1.5.1-unsigned-aligned.apk
+          cp "$BUILD_TOOLS/lib/apksigner.jar" apksigner.jar
       - uses: actions/upload-artifact@v4
         with:
           name: nuvio-bridge-v1.5.1-unsigned
           retention-days: 1
           if-no-files-found: error
-          path: |\n            NuvioRecommendationOpener-v1.5.1-unsigned-aligned.apk\n            apksigner.jar
+          path: |
+            NuvioRecommendationOpener-v1.5.1-unsigned-aligned.apk
+            apksigner.jar
