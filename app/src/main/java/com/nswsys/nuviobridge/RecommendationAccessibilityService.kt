@@ -50,6 +50,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
     private var lastMediaFocusCenterX = 0
     private var lastMediaFocusCenterY = 0
     private var lastSponsoredSkipAt = 0L
+    private var lastSourceLessAdActionAt = 0L
     private var sponsoredSkipStreak = 0
     private var lastSponsoredScanKey = ""
     private var lastSponsoredScanWasSponsored = false
@@ -238,6 +239,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         lastFocusedCandidates = candidates
         lastFocusedRawValues = directValues
         lastFocusedAt = SystemClock.uptimeMillis()
+        lastSourceLessAdActionAt = 0L
         event.source?.let { source ->
             val bounds = Rect()
             source.getBoundsInScreen(bounds)
@@ -261,18 +263,27 @@ class RecommendationAccessibilityService : AccessibilityService() {
         className: String
     ): Boolean {
         if (!sponsoredMonitoringEnabled()) return false
+        val now = SystemClock.uptimeMillis()
+        val hasAdAction = labels.asSequence()
+            .map(TitleNormalizer::normalized)
+            .any(SOURCELESS_AD_ACTIONS::contains)
+        val actionSeenBeforeBadge =
+            now - lastSourceLessAdActionAt <= SOURCELESS_UP_INFERENCE_WINDOW_MS
         val verdict = SponsoredSectionDetector.evaluate(labels)
-        if (!verdict.isSponsored) return false
+        if (!verdict.isSponsored) {
+            if (hasAdAction) lastSourceLessAdActionAt = now
+            return false
+        }
         Log.d(ADS_TAG, "Source-less sponsored focus detected: $verdict labels=$labels")
         if (!AppSettings.skipSponsoredSections(this)) return true
 
-        val now = SystemClock.uptimeMillis()
         if (now - lastSponsoredSkipAt < SOURCELESS_SKIP_DEBOUNCE_MS) return true
-        val direction = if (now - lastVerticalKeyAt <= SPONSORED_KEY_WINDOW_MS) {
-            lastVerticalKeyCode
-        } else {
-            KeyEvent.KEYCODE_DPAD_DOWN
+        val direction = when {
+            actionSeenBeforeBadge -> KeyEvent.KEYCODE_DPAD_UP
+            now - lastVerticalKeyAt <= SPONSORED_KEY_WINDOW_MS -> lastVerticalKeyCode
+            else -> KeyEvent.KEYCODE_DPAD_DOWN
         }
+        lastSourceLessAdActionAt = 0L
         val globalAction = if (direction == KeyEvent.KEYCODE_DPAD_UP) {
             GLOBAL_ACTION_DPAD_UP
         } else {
@@ -282,7 +293,9 @@ class RecommendationAccessibilityService : AccessibilityService() {
         Log.d(
             TAG,
             if (moved) {
-                "Source-less sponsored section skipped with a synthetic D-pad press"
+                "Source-less sponsored section skipped " +
+                    (if (direction == KeyEvent.KEYCODE_DPAD_UP) "up" else "down") +
+                    " with a synthetic D-pad press"
             } else {
                 "Source-less sponsored section detected, but synthetic D-pad was rejected"
             }
@@ -294,7 +307,10 @@ class RecommendationAccessibilityService : AccessibilityService() {
             // One DPAD press therefore only moves deeper into the ad. Advance
             // through those internal stops, while combined ViewGroup ads still
             // receive exactly one press.
-            if (className.endsWith("TextView") && labels.size == 1) {
+            if (direction == KeyEvent.KEYCODE_DPAD_DOWN &&
+                className.endsWith("TextView") &&
+                labels.size == 1
+            ) {
                 repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
                     mainHandler.postDelayed(
                         {
@@ -1485,8 +1501,15 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val SPONSORED_CONTENT_PROBE_DELAY_MS = 80L
         private const val SPONSORED_KEY_WINDOW_MS = 900L
         private const val SOURCELESS_SKIP_DEBOUNCE_MS = 600L
+        private const val SOURCELESS_UP_INFERENCE_WINDOW_MS = 5_000L
         private const val SOURCELESS_BURST_FOLLOW_UPS = 3
         private const val SOURCELESS_BURST_INTERVAL_MS = 140L
+        private val SOURCELESS_AD_ACTIONS = setOf(
+            "learn more",
+            "ver mas",
+            "shop now",
+            "comprar ahora"
+        )
         private const val SPONSORED_WATCHDOG_INITIAL_DELAY_MS = 500L
         private const val SPONSORED_WATCHDOG_ACTIVE_MS = 350L
         private const val SPONSORED_WATCHDOG_AFTER_SKIP_MS = 650L
