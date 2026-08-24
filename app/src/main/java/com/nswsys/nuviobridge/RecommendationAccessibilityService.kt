@@ -183,6 +183,12 @@ class RecommendationAccessibilityService : AccessibilityService() {
     }
 
     private fun rememberFocusedRecommendation(event: AccessibilityEvent) {
+        val directText = event.text.mapNotNull { it?.toString() }
+        val directDescription = event.contentDescription?.toString()
+        val directValues = buildList {
+            addAll(directText)
+            directDescription?.let(::add)
+        }
         val focusedSource = event.source
         focusedSource?.let { source ->
             // Google TV already gives us the newly focused node here. Inspect
@@ -203,11 +209,9 @@ class RecommendationAccessibilityService : AccessibilityService() {
                     "text=${event.text}, description=${event.contentDescription}"
             )
         }
-        val directText = event.text.mapNotNull { it?.toString() }
-        val directDescription = event.contentDescription?.toString()
-        val directValues = buildList {
-            addAll(directText)
-            directDescription?.let(::add)
+        if (focusedSource == null && skipSourceLessSponsoredEvent(directValues)) {
+            clearFocusedRecommendation()
+            return
         }
         if (directValues.any(TitleNormalizer::isProviderPlaybackAction) ||
             TitleNormalizer.isLauncherControl(directValues)
@@ -241,6 +245,43 @@ class RecommendationAccessibilityService : AccessibilityService() {
         if (previousFingerprint != TitleNormalizer.normalized(candidates.first())) {
             Log.d(TAG, "Focused title stored: ${candidates.first()}")
         }
+    }
+
+    /**
+     * Sabrina exposes focus labels but deliberately redacts event.source.
+     * The explicit Sponsored/Patrocinado event is still decisive evidence, so
+     * use the launcher's next focus event itself as the skip trigger.
+     */
+    private fun skipSourceLessSponsoredEvent(labels: List<String>): Boolean {
+        if (!sponsoredMonitoringEnabled()) return false
+        val verdict = SponsoredSectionDetector.evaluate(labels)
+        if (!verdict.isSponsored) return false
+        Log.d(ADS_TAG, "Source-less sponsored focus detected: $verdict labels=$labels")
+        if (!AppSettings.skipSponsoredSections(this)) return true
+
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSponsoredSkipAt < SOURCELESS_SKIP_DEBOUNCE_MS) return true
+        val direction = if (now - lastVerticalKeyAt <= SPONSORED_KEY_WINDOW_MS) {
+            lastVerticalKeyCode
+        } else {
+            KeyEvent.KEYCODE_DPAD_DOWN
+        }
+        val globalAction = if (direction == KeyEvent.KEYCODE_DPAD_UP) {
+            GLOBAL_ACTION_DPAD_UP
+        } else {
+            GLOBAL_ACTION_DPAD_DOWN
+        }
+        val moved = runCatching { performGlobalAction(globalAction) }.getOrDefault(false)
+        Log.d(
+            TAG,
+            if (moved) {
+                "Source-less sponsored section skipped with a synthetic D-pad press"
+            } else {
+                "Source-less sponsored section detected, but synthetic D-pad was rejected"
+            }
+        )
+        if (moved) lastSponsoredSkipAt = now
+        return true
     }
 
     private fun scheduleSponsoredRootProbe(delayMs: Long, replacePending: Boolean = false) {
@@ -1418,6 +1459,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val SPONSORED_KEY_PROBE_DELAY_MS = 180L
         private const val SPONSORED_CONTENT_PROBE_DELAY_MS = 80L
         private const val SPONSORED_KEY_WINDOW_MS = 900L
+        private const val SOURCELESS_SKIP_DEBOUNCE_MS = 600L
         private const val SPONSORED_WATCHDOG_INITIAL_DELAY_MS = 500L
         private const val SPONSORED_WATCHDOG_ACTIVE_MS = 350L
         private const val SPONSORED_WATCHDOG_AFTER_SKIP_MS = 650L
