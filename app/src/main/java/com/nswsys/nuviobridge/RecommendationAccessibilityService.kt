@@ -209,7 +209,11 @@ class RecommendationAccessibilityService : AccessibilityService() {
                     "text=${event.text}, description=${event.contentDescription}"
             )
         }
-        if (focusedSource == null && skipSourceLessSponsoredEvent(directValues)) {
+        if (focusedSource == null && skipSourceLessSponsoredEvent(
+                labels = directValues,
+                className = event.className?.toString().orEmpty()
+            )
+        ) {
             clearFocusedRecommendation()
             return
         }
@@ -252,7 +256,10 @@ class RecommendationAccessibilityService : AccessibilityService() {
      * The explicit Sponsored/Patrocinado event is still decisive evidence, so
      * use the launcher's next focus event itself as the skip trigger.
      */
-    private fun skipSourceLessSponsoredEvent(labels: List<String>): Boolean {
+    private fun skipSourceLessSponsoredEvent(
+        labels: List<String>,
+        className: String
+    ): Boolean {
         if (!sponsoredMonitoringEnabled()) return false
         val verdict = SponsoredSectionDetector.evaluate(labels)
         if (!verdict.isSponsored) return false
@@ -280,7 +287,25 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 "Source-less sponsored section detected, but synthetic D-pad was rejected"
             }
         )
-        if (moved) lastSponsoredSkipAt = now
+        if (moved) {
+            lastSponsoredSkipAt = now
+            // On Sabrina a standalone Sponsored TextView is followed by the
+            // creative title, description and CTA as separate focus stops.
+            // One DPAD press therefore only moves deeper into the ad. Advance
+            // through those internal stops, while combined ViewGroup ads still
+            // receive exactly one press.
+            if (className.endsWith("TextView") && labels.size == 1) {
+                repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
+                    mainHandler.postDelayed(
+                        {
+                            runCatching { performGlobalAction(globalAction) }
+                            Log.d(TAG, "Sponsored skip follow-up ${index + 1}")
+                        },
+                        SOURCELESS_BURST_INTERVAL_MS * (index + 1)
+                    )
+                }
+            }
+        }
         return true
     }
 
@@ -1460,6 +1485,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val SPONSORED_CONTENT_PROBE_DELAY_MS = 80L
         private const val SPONSORED_KEY_WINDOW_MS = 900L
         private const val SOURCELESS_SKIP_DEBOUNCE_MS = 600L
+        private const val SOURCELESS_BURST_FOLLOW_UPS = 3
+        private const val SOURCELESS_BURST_INTERVAL_MS = 140L
         private const val SPONSORED_WATCHDOG_INITIAL_DELAY_MS = 500L
         private const val SPONSORED_WATCHDOG_ACTIVE_MS = 350L
         private const val SPONSORED_WATCHDOG_AFTER_SKIP_MS = 650L
