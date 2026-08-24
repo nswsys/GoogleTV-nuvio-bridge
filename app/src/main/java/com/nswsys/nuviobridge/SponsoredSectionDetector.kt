@@ -26,6 +26,7 @@ object SponsoredSectionDetector {
     private const val MARKER_WEIGHT = 2
     private const val RESOURCE_ID_WEIGHT = 2
     private const val ACTION_WEIGHT = 1
+    private const val MAX_ACTION_SIGNALS = 2
 
     // Phrases that only ever appear inside an ad slot.
     private val decisiveMarkers = listOf(
@@ -70,6 +71,7 @@ object SponsoredSectionDetector {
         "learn more",
         "more info",
         "info",
+        "ver mas",
         "mas informacion",
         "obtener mas informacion",
         "saber mas",
@@ -132,8 +134,11 @@ object SponsoredSectionDetector {
                 reasons += "viewId=\"$it\""
             }
 
-        normalizedLabels.firstOrNull { label -> actions.any { label.containsPhrase(it) } }
-            ?.let {
+        normalizedLabels.asSequence()
+            .mapNotNull { label -> actions.firstOrNull { label.containsPhrase(it) } }
+            .distinct()
+            .take(MAX_ACTION_SIGNALS)
+            .forEach {
                 score += ACTION_WEIGHT
                 reasons += "action=\"$it\""
             }

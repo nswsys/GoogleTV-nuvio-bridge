@@ -182,11 +182,17 @@ class RecommendationAccessibilityService : AccessibilityService() {
     }
 
     private fun rememberFocusedRecommendation(event: AccessibilityEvent) {
-        if (AppSettings.skipSponsoredSections(this) &&
-            event.source?.let { skipSponsoredSectionIfNeeded(it) } == true
-        ) {
-            clearFocusedRecommendation()
-            return
+        event.source?.let { source ->
+            // Google TV already gives us the newly focused node here. Inspect
+            // it directly instead of depending on findFocus(), which returns
+            // null on some Compose launcher surfaces (including Sabrina).
+            if (sponsoredMonitoringEnabled()) {
+                logSponsoredDiagnostics(source)
+                if (skipSponsoredSectionIfNeeded(source)) {
+                    clearFocusedRecommendation()
+                    return
+                }
+            }
         }
         val directText = event.text.mapNotNull { it?.toString() }
         val directDescription = event.contentDescription?.toString()

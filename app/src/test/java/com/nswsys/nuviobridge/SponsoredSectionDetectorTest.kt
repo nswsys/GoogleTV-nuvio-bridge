@@ -78,6 +78,13 @@ class SponsoredSectionDetectorTest {
     }
 
     @Test
+    fun twoIndependentAdActionsAreEnough() {
+        assertTrue(
+            SponsoredSectionDetector.isSponsoredContainer(listOf("Ver más", "Info"))
+        )
+    }
+
+    @Test
     fun badgePlusActionStillMatchesTheOriginalBehaviour() {
         assertTrue(
             SponsoredSectionDetector.isSponsoredContainer(listOf("Sponsored", "Learn more"))
