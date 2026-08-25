@@ -51,7 +51,9 @@ class RecommendationAccessibilityService : AccessibilityService() {
     private var lastMediaFocusCenterY = 0
     private var lastSponsoredSkipAt = 0L
     private var lastSourceLessAdActionAt = 0L
-    private val pendingSourceLessSponsoredFollowUps = mutableListOf<Runnable>()
+    private var sourceLessSponsoredTraversalDirection: Int? = null
+    private var sourceLessSponsoredTraversalStartedAt = 0L
+    private var sourceLessSponsoredTraversalSteps = 0
     private var sponsoredSkipStreak = 0
     private var lastSponsoredScanKey = ""
     private var lastSponsoredScanWasSponsored = false
@@ -222,7 +224,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
         if (directValues.any(TitleNormalizer::isProviderPlaybackAction) ||
             TitleNormalizer.isLauncherControl(directValues)
         ) {
-            cancelSourceLessSponsoredFollowUps("normal launcher content")
+            finishSourceLessSponsoredTraversal("normal launcher content")
             clearFocusedRecommendation()
             return
         }
@@ -236,7 +238,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 emptyList(), launcherAppLabels
             )
         ) return
-        cancelSourceLessSponsoredFollowUps("media recommendation")
+        finishSourceLessSponsoredTraversal("media recommendation")
         val previousFingerprint = lastFocusedCandidates.firstOrNull()
             ?.let(TitleNormalizer::normalized)
         lastFocusedCandidates = candidates
@@ -274,6 +276,20 @@ class RecommendationAccessibilityService : AccessibilityService() {
             now - lastSourceLessAdActionAt <= SOURCELESS_UP_INFERENCE_WINDOW_MS
         val verdict = SponsoredSectionDetector.evaluate(labels)
         if (!verdict.isSponsored) {
+            val activeDirection = sourceLessSponsoredTraversalDirection
+                ?.takeIf {
+                    now - sourceLessSponsoredTraversalStartedAt <=
+                        SOURCELESS_TRAVERSAL_TIMEOUT_MS
+                }
+            if (activeDirection != null &&
+                (className.endsWith("TextView") || className.endsWith("Button"))
+            ) {
+                // Advance only after Sabrina reports the next internal focus
+                // stop. This prevents several queued actions from overshooting
+                // the first recommendation outside the sponsored section.
+                stepThroughSourceLessSponsored(activeDirection, "follow-up")
+                return true
+            }
             if (hasAdAction) {
                 lastSourceLessAdActionAt = now
                 // Entering a Sabrina ad from below lands on its isolated CTA
@@ -296,10 +312,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
                     )
                     if (moved) {
                         lastSponsoredSkipAt = now
-                        scheduleSourceLessSponsoredFollowUps(
-                            GLOBAL_ACTION_DPAD_UP,
-                            "Sponsored UP follow-up"
-                        )
+                        startSourceLessSponsoredTraversal(KeyEvent.KEYCODE_DPAD_UP, now)
+                        lastSourceLessAdActionAt = 0L
                     }
                     return true
                 }
@@ -309,10 +323,19 @@ class RecommendationAccessibilityService : AccessibilityService() {
         Log.d(ADS_TAG, "Source-less sponsored focus detected: $verdict labels=$labels")
         if (!AppSettings.skipSponsoredSections(this)) return true
 
+        val activeDirection = sourceLessSponsoredTraversalDirection
+            ?.takeIf {
+                now - sourceLessSponsoredTraversalStartedAt <=
+                    SOURCELESS_TRAVERSAL_TIMEOUT_MS
+            }
+        if (activeDirection != null) {
+            stepThroughSourceLessSponsored(activeDirection, "badge follow-up")
+            return true
+        }
         if (now - lastSponsoredSkipAt < SOURCELESS_SKIP_DEBOUNCE_MS) return true
         val direction = when {
-            actionSeenBeforeBadge -> KeyEvent.KEYCODE_DPAD_UP
             now - lastVerticalKeyAt <= SPONSORED_KEY_WINDOW_MS -> lastVerticalKeyCode
+            actionSeenBeforeBadge -> KeyEvent.KEYCODE_DPAD_UP
             else -> KeyEvent.KEYCODE_DPAD_DOWN
         }
         lastSourceLessAdActionAt = 0L
@@ -334,49 +357,45 @@ class RecommendationAccessibilityService : AccessibilityService() {
         )
         if (moved) {
             lastSponsoredSkipAt = now
-            // On Sabrina a standalone Sponsored TextView is followed by the
-            // creative title, description and CTA as separate focus stops.
-            // One DPAD press therefore only moves deeper into the ad. Advance
-            // through those internal stops, while combined ViewGroup ads still
-            // receive exactly one press.
-            if (direction == KeyEvent.KEYCODE_DPAD_DOWN &&
-                className.endsWith("TextView") &&
-                labels.size == 1
-            ) {
-                scheduleSourceLessSponsoredFollowUps(
-                    globalAction,
-                    "Sponsored skip follow-up"
-                )
+            if (className.endsWith("TextView") && labels.size == 1) {
+                startSourceLessSponsoredTraversal(direction, now)
             }
         }
         return true
     }
 
-    private fun scheduleSourceLessSponsoredFollowUps(
-        globalAction: Int,
-        logPrefix: String
-    ) {
-        cancelSourceLessSponsoredFollowUps()
-        repeat(SOURCELESS_BURST_FOLLOW_UPS) { index ->
-            lateinit var followUp: Runnable
-            followUp = Runnable {
-                pendingSourceLessSponsoredFollowUps.remove(followUp)
-                runCatching { performGlobalAction(globalAction) }
-                Log.d(TAG, "$logPrefix ${index + 1}")
-            }
-            pendingSourceLessSponsoredFollowUps += followUp
-            mainHandler.postDelayed(
-                followUp,
-                SOURCELESS_BURST_INTERVAL_MS * (index + 1)
-            )
-        }
+    private fun startSourceLessSponsoredTraversal(direction: Int, now: Long) {
+        sourceLessSponsoredTraversalDirection = direction
+        sourceLessSponsoredTraversalStartedAt = now
+        sourceLessSponsoredTraversalSteps = 1
     }
 
-    private fun cancelSourceLessSponsoredFollowUps(reason: String? = null) {
-        if (pendingSourceLessSponsoredFollowUps.isEmpty()) return
-        pendingSourceLessSponsoredFollowUps.forEach(mainHandler::removeCallbacks)
-        pendingSourceLessSponsoredFollowUps.clear()
-        reason?.let { Log.d(TAG, "Sponsored follow-ups cancelled: $it") }
+    private fun stepThroughSourceLessSponsored(direction: Int, stage: String) {
+        if (sourceLessSponsoredTraversalSteps >= SOURCELESS_TRAVERSAL_MAX_STEPS) {
+            finishSourceLessSponsoredTraversal("safety limit")
+            return
+        }
+        val globalAction = if (direction == KeyEvent.KEYCODE_DPAD_UP) {
+            GLOBAL_ACTION_DPAD_UP
+        } else {
+            GLOBAL_ACTION_DPAD_DOWN
+        }
+        val moved = runCatching { performGlobalAction(globalAction) }.getOrDefault(false)
+        sourceLessSponsoredTraversalSteps++
+        Log.d(
+            TAG,
+            "Sponsored ${if (direction == KeyEvent.KEYCODE_DPAD_UP) "UP" else "DOWN"} " +
+                "$stage $sourceLessSponsoredTraversalSteps; moved=$moved"
+        )
+        if (!moved) finishSourceLessSponsoredTraversal("synthetic D-pad rejected")
+    }
+
+    private fun finishSourceLessSponsoredTraversal(reason: String? = null) {
+        if (sourceLessSponsoredTraversalDirection == null) return
+        sourceLessSponsoredTraversalDirection = null
+        sourceLessSponsoredTraversalStartedAt = 0L
+        sourceLessSponsoredTraversalSteps = 0
+        reason?.let { Log.d(TAG, "Sponsored traversal finished: $it") }
     }
 
     private fun scheduleSponsoredRootProbe(delayMs: Long, replacePending: Boolean = false) {
@@ -1556,8 +1575,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val SPONSORED_KEY_WINDOW_MS = 900L
         private const val SOURCELESS_SKIP_DEBOUNCE_MS = 600L
         private const val SOURCELESS_UP_INFERENCE_WINDOW_MS = 5_000L
-        private const val SOURCELESS_BURST_FOLLOW_UPS = 3
-        private const val SOURCELESS_BURST_INTERVAL_MS = 140L
+        private const val SOURCELESS_TRAVERSAL_TIMEOUT_MS = 2_500L
+        private const val SOURCELESS_TRAVERSAL_MAX_STEPS = 6
         private val SOURCELESS_AD_ACTIONS = setOf(
             "learn more",
             "ver mas",
