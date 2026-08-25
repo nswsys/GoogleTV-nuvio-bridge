@@ -298,6 +298,14 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 stepThroughSourceLessSponsored(activeDirection, "follow-up")
                 return true
             }
+            if (activeDirection != null) {
+                // Sabrina exposes the recommendation above an ad as a plain
+                // android.view.View (for example a YouTube card). It may not
+                // satisfy the media-title filters, but its class proves that
+                // focus already left the TextView/Button ad internals. End the
+                // traversal now so the next physical DOWN starts a fresh pass.
+                finishSourceLessSponsoredTraversal("focus left sponsored controls")
+            }
             if (className.endsWith("Button") &&
                 now - lastSourceLessSponsoredDownExitAt <=
                     SOURCELESS_POST_EXIT_ACTION_LEARN_WINDOW_MS
