@@ -54,6 +54,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
     private var sourceLessSponsoredTraversalDirection: Int? = null
     private var sourceLessSponsoredTraversalStartedAt = 0L
     private var sourceLessSponsoredTraversalSteps = 0
+    private var lastSourceLessSponsoredDownExitAt = 0L
+    private val learnedSourceLessAdActions = linkedSetOf<String>()
     private var sponsoredSkipStreak = 0
     private var lastSponsoredScanKey = ""
     private var lastSponsoredScanWasSponsored = false
@@ -238,7 +240,7 @@ class RecommendationAccessibilityService : AccessibilityService() {
                 emptyList(), launcherAppLabels
             )
         ) return
-        finishSourceLessSponsoredTraversal("media recommendation")
+        finishSourceLessSponsoredTraversal("media recommendation", markDownExit = true)
         val previousFingerprint = lastFocusedCandidates.firstOrNull()
             ?.let(TitleNormalizer::normalized)
         lastFocusedCandidates = candidates
@@ -269,9 +271,10 @@ class RecommendationAccessibilityService : AccessibilityService() {
     ): Boolean {
         if (!sponsoredMonitoringEnabled()) return false
         val now = SystemClock.uptimeMillis()
-        val hasAdAction = labels.asSequence()
-            .map(TitleNormalizer::normalized)
-            .any(SOURCELESS_AD_ACTIONS::contains)
+        val normalizedLabels = labels.map(TitleNormalizer::normalized)
+        val hasAdAction = normalizedLabels.any { normalized ->
+            normalized in SOURCELESS_AD_ACTIONS || normalized in learnedSourceLessAdActions
+        }
         val actionSeenBeforeBadge =
             now - lastSourceLessAdActionAt <= SOURCELESS_UP_INFERENCE_WINDOW_MS
         val verdict = SponsoredSectionDetector.evaluate(labels)
@@ -284,11 +287,26 @@ class RecommendationAccessibilityService : AccessibilityService() {
             if (activeDirection != null &&
                 (className.endsWith("TextView") || className.endsWith("Button"))
             ) {
+                if (activeDirection == KeyEvent.KEYCODE_DPAD_DOWN &&
+                    className.endsWith("Button")
+                ) {
+                    learnSourceLessAdActions(normalizedLabels)
+                }
                 // Advance only after Sabrina reports the next internal focus
                 // stop. This prevents several queued actions from overshooting
                 // the first recommendation outside the sponsored section.
                 stepThroughSourceLessSponsored(activeDirection, "follow-up")
                 return true
+            }
+            if (className.endsWith("Button") &&
+                now - lastSourceLessSponsoredDownExitAt <=
+                    SOURCELESS_POST_EXIT_ACTION_LEARN_WINDOW_MS
+            ) {
+                // Some Sabrina launcher builds report the ad CTA a few
+                // milliseconds after the destination card. Learn that button,
+                // but do not move focus back into the ad during this event.
+                learnSourceLessAdActions(normalizedLabels)
+                return false
             }
             if (hasAdAction) {
                 lastSourceLessAdActionAt = now
@@ -390,8 +408,27 @@ class RecommendationAccessibilityService : AccessibilityService() {
         if (!moved) finishSourceLessSponsoredTraversal("synthetic D-pad rejected")
     }
 
-    private fun finishSourceLessSponsoredTraversal(reason: String? = null) {
+    private fun learnSourceLessAdActions(labels: List<String>) {
+        labels.filter(String::isNotBlank).forEach { label ->
+            if (learnedSourceLessAdActions.add(label)) {
+                Log.d(ADS_TAG, "Learned source-less sponsored action: $label")
+            }
+        }
+        while (learnedSourceLessAdActions.size > SOURCELESS_LEARNED_ACTION_LIMIT) {
+            learnedSourceLessAdActions.remove(learnedSourceLessAdActions.first())
+        }
+    }
+
+    private fun finishSourceLessSponsoredTraversal(
+        reason: String? = null,
+        markDownExit: Boolean = false
+    ) {
         if (sourceLessSponsoredTraversalDirection == null) return
+        if (markDownExit &&
+            sourceLessSponsoredTraversalDirection == KeyEvent.KEYCODE_DPAD_DOWN
+        ) {
+            lastSourceLessSponsoredDownExitAt = SystemClock.uptimeMillis()
+        }
         sourceLessSponsoredTraversalDirection = null
         sourceLessSponsoredTraversalStartedAt = 0L
         sourceLessSponsoredTraversalSteps = 0
@@ -1577,6 +1614,8 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val SOURCELESS_UP_INFERENCE_WINDOW_MS = 5_000L
         private const val SOURCELESS_TRAVERSAL_TIMEOUT_MS = 2_500L
         private const val SOURCELESS_TRAVERSAL_MAX_STEPS = 6
+        private const val SOURCELESS_POST_EXIT_ACTION_LEARN_WINDOW_MS = 900L
+        private const val SOURCELESS_LEARNED_ACTION_LIMIT = 8
         private val SOURCELESS_AD_ACTIONS = setOf(
             "learn more",
             "ver mas",
