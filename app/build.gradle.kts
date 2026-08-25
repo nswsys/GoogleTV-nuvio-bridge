@@ -22,8 +22,8 @@ android {
         applicationId = "com.nswsys.nuviobridge"
         minSdk = 24
         targetSdk = 36
-        versionCode = 39
-        versionName = "1.5.10"
+        versionCode = 40
+        versionName = "1.5.11"
 
         buildConfigField(
             "String",
