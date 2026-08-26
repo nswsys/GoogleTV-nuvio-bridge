@@ -15,7 +15,6 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
-import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -41,8 +40,6 @@ class RecommendationAccessibilityService : AccessibilityService() {
     private val clickDetailProbes = ArrayList<Runnable>()
     private var overlayButton: Button? = null
     private var transitionOverlay: TextView? = null
-    private var sponsoredTransitionOverlay: View? = null
-    private var pendingSponsoredTransitionHide: Runnable? = null
     private var lastFingerprint = ""
     private var lastClickAt = 0L
     private var lastAcceptedClickUptime = 0L
@@ -328,6 +325,11 @@ class RecommendationAccessibilityService : AccessibilityService() {
                     AppSettings.skipSponsoredSections(this) &&
                     now - lastSponsoredSkipAt >= SOURCELESS_SKIP_DEBOUNCE_MS
                 ) {
+                    if (tryDirectSourceLessSponsoredJump(KeyEvent.KEYCODE_DPAD_UP)) {
+                        lastSponsoredSkipAt = now
+                        lastSourceLessAdActionAt = 0L
+                        return true
+                    }
                     val moved = runCatching {
                         performGlobalAction(GLOBAL_ACTION_DPAD_UP)
                     }.getOrDefault(false)
@@ -373,6 +375,10 @@ class RecommendationAccessibilityService : AccessibilityService() {
         } else {
             GLOBAL_ACTION_DPAD_DOWN
         }
+        if (tryDirectSourceLessSponsoredJump(direction)) {
+            lastSponsoredSkipAt = now
+            return true
+        }
         val moved = runCatching { performGlobalAction(globalAction) }.getOrDefault(false)
         Log.d(
             TAG,
@@ -397,7 +403,6 @@ class RecommendationAccessibilityService : AccessibilityService() {
         sourceLessSponsoredTraversalDirection = direction
         sourceLessSponsoredTraversalStartedAt = now
         sourceLessSponsoredTraversalSteps = 1
-        showSponsoredTransitionOverlay()
     }
 
     private fun stepThroughSourceLessSponsored(direction: Int, stage: String) {
@@ -444,81 +449,39 @@ class RecommendationAccessibilityService : AccessibilityService() {
         sourceLessSponsoredTraversalDirection = null
         sourceLessSponsoredTraversalStartedAt = 0L
         sourceLessSponsoredTraversalSteps = 0
-        hideSponsoredTransitionOverlay()
         reason?.let { Log.d(TAG, "Sponsored traversal finished: $it") }
     }
 
-    private fun showSponsoredTransitionOverlay() {
-        pendingSponsoredTransitionHide?.let(mainHandler::removeCallbacks)
-        pendingSponsoredTransitionHide = null
-        val existing = sponsoredTransitionOverlay
-        if (existing != null) {
-            existing.animate().cancel()
-            existing.animate()
-                .alpha(SPONSORED_TRANSITION_ALPHA)
-                .setDuration(SPONSORED_TRANSITION_FADE_IN_MS)
-                .start()
-            scheduleSponsoredTransitionFailsafe()
-            return
+    @Suppress("DEPRECATION")
+    private fun tryDirectSourceLessSponsoredJump(direction: Int): Boolean {
+        val container = findFocusedSponsoredContainerInVisibleRoots(
+            allowTreeFallback = true
+        ) ?: run {
+            Log.d(TAG, "Direct sponsored jump unavailable: no focused container")
+            return false
         }
-        val overlay = View(this).apply {
-            setBackgroundColor(Color.rgb(11, 11, 16))
-            alpha = 0f
+        val target = findRecommendationOutside(container, direction)
+        container.recycle()
+        if (target == null) {
+            Log.d(TAG, "Direct sponsored jump unavailable: no exterior target")
+            return false
         }
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.FILL }
-        try {
-            windowManager.addView(overlay, params)
-            sponsoredTransitionOverlay = overlay
-            overlay.animate()
-                .alpha(SPONSORED_TRANSITION_ALPHA)
-                .setDuration(SPONSORED_TRANSITION_FADE_IN_MS)
-                .start()
-            scheduleSponsoredTransitionFailsafe()
-        } catch (exception: Exception) {
-            Log.w(TAG, "Unable to show sponsored transition overlay", exception)
-        }
-    }
-
-    private fun scheduleSponsoredTransitionFailsafe() {
-        lateinit var failsafe: Runnable
-        failsafe = Runnable {
-            if (pendingSponsoredTransitionHide === failsafe) {
-                pendingSponsoredTransitionHide = null
-                hideSponsoredTransitionOverlay()
+        val moved = runCatching {
+            target.node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) ||
+                target.node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+        }.getOrDefault(false)
+        Log.d(
+            TAG,
+            if (moved) {
+                "Sponsored section jumped directly " +
+                    (if (direction == KeyEvent.KEYCODE_DPAD_UP) "up" else "down") +
+                    " -> ${target.label}"
+            } else {
+                "Direct sponsored jump rejected; using D-pad fallback"
             }
-        }
-        pendingSponsoredTransitionHide = failsafe
-        mainHandler.postDelayed(failsafe, SPONSORED_TRANSITION_MAX_MS)
-    }
-
-    private fun hideSponsoredTransitionOverlay(immediately: Boolean = false) {
-        pendingSponsoredTransitionHide?.let(mainHandler::removeCallbacks)
-        pendingSponsoredTransitionHide = null
-        val overlay = sponsoredTransitionOverlay ?: return
-        overlay.animate().cancel()
-        if (immediately) {
-            runCatching { windowManager.removeView(overlay) }
-            sponsoredTransitionOverlay = null
-            return
-        }
-        overlay.animate()
-            .alpha(0f)
-            .setDuration(SPONSORED_TRANSITION_FADE_OUT_MS)
-            .withEndAction {
-                if (sponsoredTransitionOverlay === overlay) {
-                    runCatching { windowManager.removeView(overlay) }
-                    sponsoredTransitionOverlay = null
-                }
-            }
-            .start()
+        )
+        target.node.recycle()
+        return moved
     }
 
     private fun scheduleSponsoredRootProbe(delayMs: Long, replacePending: Boolean = false) {
@@ -1634,7 +1597,6 @@ class RecommendationAccessibilityService : AccessibilityService() {
         latestGoogleTvRoot = null
         latestGoogleTvRootAt = 0L
         hideOverlay()
-        hideSponsoredTransitionOverlay(immediately = true)
         hideTransitionOverlay()
         executor.shutdownNow()
         super.onDestroy()
@@ -1703,10 +1665,6 @@ class RecommendationAccessibilityService : AccessibilityService() {
         private const val SOURCELESS_TRAVERSAL_MAX_STEPS = 6
         private const val SOURCELESS_POST_EXIT_ACTION_LEARN_WINDOW_MS = 900L
         private const val SOURCELESS_LEARNED_ACTION_LIMIT = 8
-        private const val SPONSORED_TRANSITION_ALPHA = 0.94f
-        private const val SPONSORED_TRANSITION_FADE_IN_MS = 45L
-        private const val SPONSORED_TRANSITION_FADE_OUT_MS = 90L
-        private const val SPONSORED_TRANSITION_MAX_MS = 900L
         private val SOURCELESS_AD_ACTIONS = setOf(
             "learn more",
             "ver mas",
